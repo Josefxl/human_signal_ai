@@ -1,0 +1,8 @@
+opencv-python
+mediapipe
+numpy
+scipy
+streamlit
+plotly
+pydantic
+pyyaml

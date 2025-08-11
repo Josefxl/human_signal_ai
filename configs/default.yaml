@@ -1,0 +1,38 @@
+video:
+  source: 0
+  fps: 30
+  width: 1280
+  height: 720
+
+windows:
+  fatigue_seconds: 60
+  attention_seconds: 30
+  stress_seconds: 30
+  update_hz: 5
+
+thresholds:
+  perclos_drowsy: 0.25
+  blink_rate_high: 25
+  gaze_offscreen_secs: 3.0
+  stress_tension_high: 0.7
+  neck_angle_slouch: 22
+  yawn_mar: 0.6          # mouth aspect ratio considered a yawn
+  yawn_min_secs: 0.5     # how long MAR must stay high to count
+  distance_face_ratio_close: 0.32  # face diag / frame diag: above => too close
+  distance_face_ratio_far: 0.12    # below => too far
+
+smoothing:
+  ema_alpha: 0.25
+
+quality:
+  min_brightness: 60
+  max_motion_px: 5
+  min_confidence: 0.5
+
+fusion:
+  weights:
+    fatigue: 0.4
+    attention: 0.35
+    stress: 0.25
+
+
