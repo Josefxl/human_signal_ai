@@ -1,4 +1,4 @@
-# app.py — Human Signal AI (MVP)
+# app.py — Human Signal AI (MVP) + Recording with real-time pacing
 import time
 from collections import deque
 from pathlib import Path
@@ -51,17 +51,33 @@ user_cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
 user_cfg = user_cfg or {}
 cfg = DEFAULT_CFG | {k: (DEFAULT_CFG.get(k, {}) | user_cfg.get(k, {})) for k in DEFAULT_CFG.keys()}
 
-# ---------------- Calibration state ----------------
+# ---------------- Calibration & recording state ----------------
 if "calibrating" not in st.session_state:
     st.session_state.calibrating = False
 if "cal_start" not in st.session_state:
     st.session_state.cal_start = 0.0
-
-# motion state for fatigue bumps
 if "prev_gray" not in st.session_state:
     st.session_state.prev_gray = None
 if "motion_ema" not in st.session_state:
     st.session_state.motion_ema = 0.0
+
+# recording session_state
+if "recording" not in st.session_state:
+    st.session_state.recording = False
+if "rec_end_time" not in st.session_state:
+    st.session_state.rec_end_time = 0.0
+if "rec_path" not in st.session_state:
+    st.session_state.rec_path = None
+if "csv_path" not in st.session_state:
+    st.session_state.csv_path = None
+if "recorder" not in st.session_state:
+    st.session_state.recorder = None
+
+# --- recording pacing state ---
+if "rec_fps" not in st.session_state:
+    st.session_state.rec_fps = 15  # playback FPS for saved file
+if "last_write_t" not in st.session_state:
+    st.session_state.last_write_t = 0.0
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -82,6 +98,37 @@ with st.sidebar:
         st.session_state.prev_gray = None
         st.session_state.motion_ema = 0.0
     st.caption("Tip: Sit upright, look at the camera, neutral face, normal breathing during calibration.")
+
+    st.markdown("---")
+    # Record controls
+    if not st.session_state.recording:
+        if st.button("⏺ Record 30s"):
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            out_dir = r"C:\Users\Ghost\Desktop"  # your chosen path
+            os.makedirs(out_dir, exist_ok=True)
+            st.session_state.rec_path = os.path.join(out_dir, f"session_{ts}.mp4")
+            st.session_state.csv_path = os.path.join(out_dir, f"session_{ts}.csv")
+
+            # choose a reliable output FPS for the saved file
+            st.session_state.rec_fps = 15  # adjust if you prefer
+            st.session_state.recorder = VideoRecorder(
+                st.session_state.rec_path,
+                fps=st.session_state.rec_fps,
+                size=(1280, 900)  # 1280x720 cam + 180px metrics strip
+            )
+
+            st.session_state.recording = True
+            st.session_state.rec_end_time = time.time() + 30.0
+            st.session_state.last_write_t = 0.0  # reset pacing
+
+            # CSV header
+            with open(st.session_state.csv_path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["t_epoch", "fatigue", "attention", "stress", "posture", "distance"])
+    else:
+        st.write(f"Recording… {max(0, int(st.session_state.rec_end_time - time.time()))}s left")
+        if st.button("⏹ Stop"):
+            st.session_state.rec_end_time = time.time()
 
 # ---------------- Video capture ----------------
 # On Windows, CAP_DSHOW is often stable; try CAP_MSMF if needed.
@@ -177,6 +224,48 @@ try:
         labeled = draw_labels(frame, post, dist)  # BGR in → BGR out
         video_placeholder.image(labeled[:, :, ::-1], channels="RGB", use_container_width=True)
 
+        # ----- Recording pipeline (real-time pacing) -----
+        if st.session_state.recording:
+            # Compose dashboard frame (camera + 3 sparklines)
+            rec_frame = compose_dashboard_frame(
+                labeled,                # BGR with labels
+                list(fatigue_buf),
+                list(attention_buf),
+                list(stress_buf)
+            )
+
+            now = time.time()
+            frame_interval = 1.0 / st.session_state.rec_fps
+            if st.session_state.last_write_t == 0.0:
+                st.session_state.last_write_t = now
+
+            # Write as many frames as wall-clock requires
+            while st.session_state.last_write_t + frame_interval <= now:
+                if st.session_state.recorder and st.session_state.recorder.is_open:
+                    st.session_state.recorder.write(rec_frame)
+                st.session_state.last_write_t += frame_interval
+
+            # Append one CSV row per loop (analytics)
+            with open(st.session_state.csv_path, "a", newline="") as f:
+                w = csv.writer(f)
+                w.writerow([
+                    now,
+                    f"{fatigue_sm:.2f}",
+                    f"{attention_sm:.2f}",
+                    f"{stress_sm:.2f}",
+                    post["state"],
+                    dist["state"],
+                ])
+
+            # Auto-stop
+            if now >= st.session_state.rec_end_time:
+                st.session_state.recording = False
+                st.session_state.last_write_t = 0.0
+                if st.session_state.recorder:
+                    st.session_state.recorder.release()
+                st.success(f"Saved video → {st.session_state.rec_path}")
+                st.info(f"Saved metrics → {st.session_state.csv_path}")
+
         # ---- Charts & status (lower rate = no flicker)
         frame_count += 1
         if frame_count % _chart_every == 0:
@@ -203,4 +292,8 @@ try:
 except KeyboardInterrupt:
     pass
 finally:
+    # Ensure recorder is released and pacing reset
+    if st.session_state.get("recorder"):
+        st.session_state.recorder.release()
+    st.session_state.last_write_t = 0.0
     cap.release()
