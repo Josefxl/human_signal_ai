@@ -19,8 +19,11 @@ A real-time computer vision system that tracks human **attention, fatigue, and s
 
 ---
 
-## 📹 Demo
-👉 [Watch the demo here](INSERT-YOUR-VIDEO-LINK)
+## 🎥 Demo
+
+Here’s a short demo of the system in action:
+
+![Demo](configs/demo.gif)
 
 ---
 
