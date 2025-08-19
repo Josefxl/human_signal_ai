@@ -1,4 +1,3 @@
-# --- PATCH 02: modules/ergonomics_distance.py ---
 import numpy as np
 
 def distance_status(det, cfg):

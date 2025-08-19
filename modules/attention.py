@@ -1,4 +1,4 @@
-# modules/attention.py — v2.3 (iris-based, deadzone, auto-baseline, debug)
+# (iris-based, deadzone, auto-baseline, debug)
 import time, math
 import numpy as np
 

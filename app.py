@@ -1,15 +1,17 @@
-# app.py — Human Signal AI (MVP) + Recording with real-time pacing
+# Human Signal AI (MVP) + Recording + Alerts + Futuristic Overlay (YAML config)
 import time
 from collections import deque
 from pathlib import Path
-from ui.record import VideoRecorder, compose_dashboard_frame
-import csv, os
+import os
+import csv
 
 import cv2
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import yaml
+
+from ui.record import VideoRecorder, compose_dashboard_frame
 
 from core.tracking import Tracker
 from core.features import compute_features
@@ -23,11 +25,12 @@ from modules.fuse import fuse_scores
 from modules.ergonomics_distance import distance_status
 from ui.overlays import draw_labels
 
+# Streamlit page
 st.set_page_config(page_title="Human Signal AI — Live Monitor", layout="wide")
 st.title("🧠 Human Signal AI — Live Health & Ergonomics Monitor (MVP)")
 st.caption("On-device. Wellness insights only — not a medical device.")
 
-# ---------------- Config (safe defaults + merge) ----------------
+# Config (safe defaults + merge with YAML)
 DEFAULT_CFG = {
     "video": {"source": 0, "fps": 30, "width": 1280, "height": 720},
     "windows": {"fatigue_seconds": 60, "attention_seconds": 30, "stress_seconds": 30, "update_hz": 5},
@@ -49,9 +52,117 @@ DEFAULT_CFG = {
 cfg_path = Path("configs/default.yaml")
 user_cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
 user_cfg = user_cfg or {}
+# shallow merge per top-level key
 cfg = DEFAULT_CFG | {k: (DEFAULT_CFG.get(k, {}) | user_cfg.get(k, {})) for k in DEFAULT_CFG.keys()}
 
-# ---------------- Calibration & recording state ----------------
+# Alerts (thresholds + debounce/hold)
+ALERTS = {
+    "DISTRACTED": {"cond": lambda att, fat, strx: att < 50.0},
+    "TIRED":      {"cond": lambda att, fat, strx: fat > 50.0},
+    "STRESSED":   {"cond": lambda att, fat, strx: strx > 50.0},
+}
+ALERT_DEBOUNCE_ON = 0.40   # seconds condition must hold before showing
+ALERT_HOLD_OFF    = 1.50   # seconds to keep banner after it clears
+
+if "alert_state" not in st.session_state:
+    st.session_state.alert_state = {name: {"is_on": False, "t_on": 0.0, "t_off": 0.0} for name in ALERTS.keys()}
+
+def _update_alert_states(att_val: float, fat_val: float, str_val: float, now: float):
+    states = st.session_state.alert_state
+    for name, spec in ALERTS.items():
+        active = bool(spec["cond"](att_val, fat_val, str_val))
+        s = states[name]
+        if active:
+            if not s["is_on"]:
+                if s["t_on"] == 0.0:
+                    s["t_on"] = now
+                if now - s["t_on"] >= ALERT_DEBOUNCE_ON:
+                    s["is_on"] = True
+                    s["t_off"] = 0.0
+            else:
+                s["t_off"] = 0.0
+        else:
+            s["t_on"] = 0.0
+            if s["is_on"]:
+                if s["t_off"] == 0.0:
+                    s["t_off"] = now
+                if now - s["t_off"] >= ALERT_HOLD_OFF:
+                    s["is_on"] = False
+
+def _draw_alert_banner(img_bgr, labels):
+    """Draw a centered translucent banner with active alert labels."""
+    if not labels:
+        return img_bgr
+    h, w = img_bgr.shape[:2]
+    text = "  •  ".join(labels)
+    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+
+    pad_x, pad_y = 28, 16
+    box_w = tw + pad_x * 2
+    box_h = th + pad_y * 2
+    x0 = (w - box_w) // 2
+    y0 = 40  # from top
+
+    overlay = img_bgr.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, img_bgr, 0.45, 0, img_bgr)
+
+    tx = x0 + pad_x
+    ty = y0 + pad_y + th
+    cv2.putText(img_bgr, text, (tx, ty), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+    return img_bgr
+
+# Futuristic keypoint overlay
+def _draw_futuristic_overlay(img_bgr, face_landmarks):
+    """
+    Draws thin neon lines/pips between a small set of facial anchors to get a 'tech HUD' vibe.
+    Safe if landmarks are missing.
+    Expects face_landmarks as (N, 3) or (N, 2) array with MediaPipe-like indices.
+    """
+    if face_landmarks is None or len(face_landmarks) < 478:
+        return img_bgr
+
+    pts = face_landmarks[:, :2].astype(np.int32)
+
+    # Some MediaPipe FaceMesh anchor indices (safe subsets)
+    idxs = {
+        "left_eye": 33,      # outer left eye corner
+        "right_eye": 263,    # outer right eye corner
+        "nose_tip": 1,       # nose tip
+        "chin": 152,         # chin
+        "forehead": 10,      # upper forehead
+        "mouth_left": 61,
+        "mouth_right": 291,
+        "left_iris": 468,
+        "right_iris": 473,
+    }
+
+    c1 = (255, 255, 255)  # white lines
+    c2 = (90, 220, 255)   # cyan pips
+
+    def P(i):
+        return tuple(pts[i])
+
+    overlay = img_bgr.copy()
+
+    # Eye to eye baseline
+    cv2.line(overlay, P(idxs["left_eye"]), P(idxs["right_eye"]), c1, 1, cv2.LINE_AA)
+    # Nose to chin vertical
+    cv2.line(overlay, P(idxs["nose_tip"]), P(idxs["chin"]), c1, 1, cv2.LINE_AA)
+    # Forehead to nose
+    cv2.line(overlay, P(idxs["forehead"]), P(idxs["nose_tip"]), c1, 1, cv2.LINE_AA)
+    # Mouth width
+    cv2.line(overlay, P(idxs["mouth_left"]), P(idxs["mouth_right"]), c1, 1, cv2.LINE_AA)
+    # Small iris pips
+    for i in [idxs["left_iris"], idxs["right_iris"]]:
+        cv2.circle(overlay, P(i), 3, c2, 1, cv2.LINE_AA)
+
+    # Subtle blend so it looks holographic
+    cv2.addWeighted(overlay, 0.45, img_bgr, 0.55, 0, img_bgr)
+    return img_bgr
+
+# Calibration & recording state
 if "calibrating" not in st.session_state:
     st.session_state.calibrating = False
 if "cal_start" not in st.session_state:
@@ -72,18 +183,17 @@ if "csv_path" not in st.session_state:
     st.session_state.csv_path = None
 if "recorder" not in st.session_state:
     st.session_state.recorder = None
-
-# --- recording pacing state ---
 if "rec_fps" not in st.session_state:
-    st.session_state.rec_fps = 15  # playback FPS for saved file
+    st.session_state.rec_fps = 15
 if "last_write_t" not in st.session_state:
     st.session_state.last_write_t = 0.0
 
-# ---------------- Sidebar ----------------
+# Sidebar
 with st.sidebar:
     st.header("Run")
     cam_index = st.number_input("Camera index", value=int(cfg["video"].get("source", 0)), step=1)
     target_fps = st.slider("Target FPS", 5, 60, int(cfg["video"].get("fps", 30)))
+    show_futuristic = st.toggle("Futuristic keypoint overlay", value=True)
     st.markdown("---")
     if st.button("Calibrate (5s)"):
         st.session_state.calibrating = True
@@ -97,6 +207,9 @@ with st.sidebar:
         # reset motion accumulator
         st.session_state.prev_gray = None
         st.session_state.motion_ema = 0.0
+        # clear alerts
+        for s in st.session_state.alert_state.values():
+            s.update({"is_on": False, "t_on": 0.0, "t_off": 0.0})
     st.caption("Tip: Sit upright, look at the camera, neutral face, normal breathing during calibration.")
 
     st.markdown("---")
@@ -104,17 +217,18 @@ with st.sidebar:
     if not st.session_state.recording:
         if st.button("⏺ Record 30s"):
             ts = time.strftime("%Y%m%d_%H%M%S")
-            out_dir = r"C:\Users\Ghost\Desktop"  # your chosen path
+            out_dir = r"C:\Users\Ghost\Desktop"  # pick your export path
             os.makedirs(out_dir, exist_ok=True)
             st.session_state.rec_path = os.path.join(out_dir, f"session_{ts}.mp4")
             st.session_state.csv_path = os.path.join(out_dir, f"session_{ts}.csv")
 
-            # choose a reliable output FPS for the saved file
-            st.session_state.rec_fps = 15  # adjust if you prefer
+            update_hz_cfg = int(cfg["windows"].get("update_hz", 5))
+            st.session_state.rec_fps = max(8, min(24, update_hz_cfg * 2))  # responsive recording
+
             st.session_state.recorder = VideoRecorder(
                 st.session_state.rec_path,
                 fps=st.session_state.rec_fps,
-                size=(1280, 900)  # 1280x720 cam + 180px metrics strip
+                size=(1280, 900)  # 1280x720 cam + 180px metric strip
             )
 
             st.session_state.recording = True
@@ -130,7 +244,7 @@ with st.sidebar:
         if st.button("⏹ Stop"):
             st.session_state.rec_end_time = time.time()
 
-# ---------------- Video capture ----------------
+# Video capture
 # On Windows, CAP_DSHOW is often stable; try CAP_MSMF if needed.
 cap = cv2.VideoCapture(int(cam_index), cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FPS, target_fps)
@@ -139,7 +253,7 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["video"]["height"])
 
 tracker = Tracker()
 
-# ---------------- Buffers & UI ----------------
+# Buffers & UI
 sec_window = 60
 buf_len = sec_window * max(1, target_fps)
 fatigue_buf, attention_buf, stress_buf = (deque(maxlen=buf_len) for _ in range(3))
@@ -160,7 +274,7 @@ def plot_series(container, ys, title, color):
     fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10), title=title, yaxis=dict(range=[0, 100]))
     container.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Main loop ----------------
+# Main loop
 try:
     t_last = time.time()
     fatigue_sm = attention_sm = stress_sm = 0.0  # post-calibration baseline
@@ -170,7 +284,7 @@ try:
             st.error("Camera read failed. Try a different index.")
             break
 
-        # ---- Metrics: process FIRST
+        # Metrics: process FIRST
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         det   = tracker.process(frame_rgb)
         feats = compute_features(det)
@@ -211,6 +325,11 @@ try:
         attention_sm = ema(att["score"], attention_sm, alpha)
         stress_sm    = ema(strx["score"], stress_sm, alpha)
 
+        # Alerts update (after smoothing)
+        _now = time.time()
+        _update_alert_states(attention_sm, fatigue_sm, stress_sm, _now)
+        active_labels = [name for name, s in st.session_state.alert_state.items() if s["is_on"]]
+
         fused = fuse_scores(
             fatigue=fat, attention=att, stress=strx,
             weights=cfg["fusion"]["weights"], min_conf=cfg["quality"]["min_confidence"]
@@ -220,18 +339,23 @@ try:
         attention_buf.append(attention_sm)
         stress_buf.append(stress_sm)
 
-        # ---- Draw RAW camera + minimal labels (posture, distance)
+        # Draw: raw camera + posture/distance labels + futuristic overlay + ALERT banner
         labeled = draw_labels(frame, post, dist)  # BGR in → BGR out
+        if show_futuristic:
+            face_landmarks = feats.get("face", None)
+            labeled = _draw_futuristic_overlay(labeled, face_landmarks)
+        labeled = _draw_alert_banner(labeled, active_labels)
+
         video_placeholder.image(labeled[:, :, ::-1], channels="RGB", use_container_width=True)
 
-        # ----- Recording pipeline (real-time pacing) -----
+        #  Recording pipeline (real-time pacing)
         if st.session_state.recording:
-            # Compose dashboard frame (camera + 3 sparklines)
+            # Compose frame: camera (with posture/distance/alerts/overlay) + 3 graphs on black
             rec_frame = compose_dashboard_frame(
-                labeled,                # BGR with labels
+                labeled,
                 list(fatigue_buf),
                 list(attention_buf),
-                list(stress_buf)
+                list(stress_buf),
             )
 
             now = time.time()
@@ -266,7 +390,7 @@ try:
                 st.success(f"Saved video → {st.session_state.rec_path}")
                 st.info(f"Saved metrics → {st.session_state.csv_path}")
 
-        # ---- Charts & status (lower rate = no flicker)
+        # Charts & status (lower rate = no flicker)
         frame_count += 1
         if frame_count % _chart_every == 0:
             plot_series(chart1, list(fatigue_buf),   "Fatigue",   "#1f77b4")  # blue
@@ -278,7 +402,8 @@ try:
                 f"Fatigue: {fatigue_sm:0.0f} ({fat['conf']:.2f}) | "
                 f"Attention: {attention_sm:0.0f} ({att['conf']:.2f}) | "
                 f"Stress: {stress_sm:0.0f} ({strx['conf']:.2f}) | "
-                f"Posture: {post['state']} "
+                f"Posture: {post['state']} | "
+                f"Distance: {dist['state']}"
                 f"{' | ⚠ ' + ', '.join(fused['flags']) if fused['flags'] else ''}"
             )
 

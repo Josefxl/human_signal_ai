@@ -1,4 +1,4 @@
-# modules/fatigue.py — v5 (yawn to 100, motion/occlusion bump, slouch bump, time-based decay)
+# (yawn to 100, motion/occlusion bump, slouch bump, time-based decay)
 import time
 
 # Eye Aspect Ratio threshold for closed eyes (blink)
@@ -76,7 +76,7 @@ def fatigue_score(feats, quality, cfg, calibrating=False, posture_state=None, mo
     perclos = min(1.0, blink_rate / 30.0)    # normalize ~30 blinks/min → 1.0
     base_from_perclos = PERCLOS_BASE_GAIN * perclos  # gentle baseline component
 
-    # -------- Yawn detection → force to near-100 --------
+    # Yawn detection → force to near-100
     yawn_thr = cfg["thresholds"].get("yawn_mar", 0.55)
     yawn_min = cfg["thresholds"].get("yawn_min_secs", 0.3)
     if mar is not None and mar >= yawn_thr:
@@ -90,7 +90,7 @@ def fatigue_score(feats, quality, cfg, calibrating=False, posture_state=None, mo
     else:
         _state["yawn_start"] = None
 
-    # -------- Big motion / occlusion bumps --------
+    # Big motion / occlusion bumps
     # Motion bump proportional to how far above threshold we are
     if motion_energy is not None and motion_energy > MOTION_THRESHOLD:
         bump = (motion_energy - MOTION_THRESHOLD) * MOTION_GAIN  # e.g., 0.3 → (0.1*180)=18
@@ -105,11 +105,11 @@ def fatigue_score(feats, quality, cfg, calibrating=False, posture_state=None, mo
                 _state["score"] = min(100.0, _state["score"] + OCCLUSION_BUMP)
         _state["last_face_area"] = area
 
-    # -------- Slouch accumulation (gentle, time-based) --------
+    # Slouch accumulation (gentle, time-based)
     if posture_state == "slouching":
         _state["score"] = min(100.0, _state["score"] + SLOUCH_BUMP_PER_SEC * dt)
 
-    # -------- Time-based decay towards 0 --------
+    # Time-based decay towards 0
     if _state["score"] > 0.0:
         _state["score"] = max(0.0, _state["score"] - DECAY_PER_SEC * dt)
 

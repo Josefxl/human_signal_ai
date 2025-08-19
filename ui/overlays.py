@@ -1,4 +1,4 @@
-# --- PATCH 02: ui/overlays.py ---
+# ui/overlays.py
 import cv2
 
 def draw_labels(frame_bgr, posture, distance):

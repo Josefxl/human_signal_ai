@@ -1,4 +1,4 @@
-# modules/stress.py  (v3.1)
+# modules/stress.py
 import numpy as np, time
 BROW_LEFT=[70,63]; BROW_RIGHT=[300,293]
 

@@ -1,4 +1,4 @@
-# modules/posture.py — v5 (baseline + fusion + smoothing + hysteresis + dwell)
+# (baseline + fusion + smoothing + hysteresis + dwell)
 import time
 import numpy as np
 
