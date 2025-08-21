@@ -1,4 +1,4 @@
-just# Human-Signal AI: Real-Time Cognitive State Tracking
+## Human-Signal AI: Real-Time Cognitive State Tracking
 
 A real-time computer vision system that tracks human **attention, fatigue, and stress** using live video and intelligent overlays.  
 
