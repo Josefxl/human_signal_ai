@@ -1,4 +1,4 @@
-# Human-Signal AI: Real-Time Cognitive State Tracking
+just# Human-Signal AI: Real-Time Cognitive State Tracking
 
 A real-time computer vision system that tracks human **attention, fatigue, and stress** using live video and intelligent overlays.  
 
@@ -25,7 +25,4 @@ Here’s a short demo of the system in action:
 
 ![Demo](configs/demo.gif)
 
----
-
-## 🤝 Let’s Connect
-If you’re working in **AI, computer vision, HCI, or applied research**, I’d love to connect and exchange ideas.  
+--
